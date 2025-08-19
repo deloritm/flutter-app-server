@@ -2,7 +2,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const Redis = require('ioredis');
 const bodyParser = require('body-parser');
-const { v4: uuidv4 } = require('uuid'); // برای تولید unique ID
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 app.use(bodyParser.json());
@@ -22,7 +22,7 @@ const USERS = {
   '789': { valid: true, name: 'زهرا' }
 };
 
-// Set webhook دستی بعد از deploy
+// Set webhook دستی
 app.get('/set-webhook', async (req, res) => {
   const webhookUrl = `https://${req.headers.host}/webhook`;
   try {
@@ -35,10 +35,9 @@ app.get('/set-webhook', async (req, res) => {
   }
 });
 
-// Webhook endpoint برای تلگرام
+// Webhook endpoint
 app.post('/webhook', async (req, res) => {
   try {
-    // چک می‌کنیم که درخواست تکراری نباشه
     const updateId = req.body.update_id;
     const processedKey = `processed_update_${updateId}`;
     const alreadyProcessed = await redis.get(processedKey);
@@ -46,7 +45,7 @@ app.post('/webhook', async (req, res) => {
       console.log(`Duplicate update_id ${updateId}, ignoring`);
       return res.sendStatus(200);
     }
-    await redis.setex(processedKey, 3600, 'true'); // 1 ساعت ذخیره
+    await redis.setex(processedKey, 3600, 'true');
     bot.processUpdate(req.body);
     res.sendStatus(200);
   } catch (err) {
@@ -58,14 +57,15 @@ app.post('/webhook', async (req, res) => {
 // خوش‌آمدگویی به ادمین
 bot.onText(/\/start/, async (msg) => {
   if (msg.chat.id.toString() === ADMIN_CHAT_ID) {
-    await bot.sendMessage(ADMIN_CHAT_ID, 
-      '*سلام ادمین! 👋*\nاین ربات برای مدیریت درخواست‌های اپلیکیشن است.\n- درخواست‌ها رو اینجا می‌بینی.\n- با دکمه‌های *تأیید* یا *رد* پاسخ بده و توضیحات رو بنویس.',
+    await bot.sendMessage(
+      ADMIN_CHAT_ID,
+      '*سلام ادمین! 👋*\nاین ربات درخواست‌های کاربران را نمایش می‌دهد.\n1. درخواست را بررسی کنید.\n2. با دکمه‌های *تأیید* یا *رد* پاسخ دهید.\n3. توضیحات خود را بنویسید.',
       { parse_mode: 'Markdown' }
     );
   }
 });
 
-// Handle callback_query (دکمه‌های تأیید/رد)
+// Handle callback_query
 bot.on('callback_query', async (callbackQuery) => {
   const data = callbackQuery.data;
   const chatId = callbackQuery.message.chat.id;
@@ -80,7 +80,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   const parts = data.split('_');
-  if (parts.length !== 4) { // اضافه کردن requestId
+  if (parts.length !== 4) {
     bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: ساختار داده نادرست' });
     return;
   }
@@ -90,7 +90,6 @@ bot.on('callback_query', async (callbackQuery) => {
   const license = parts[2];
   const requestId = parts[3];
 
-  // چک می‌کنیم که callback قبلاً پردازش نشده باشه
   const callbackKey = `callback_${requestId}_${nationalCode}_${license}`;
   const alreadyProcessed = await redis.get(callbackKey);
   if (alreadyProcessed) {
@@ -98,31 +97,26 @@ bot.on('callback_query', async (callbackQuery) => {
     return;
   }
 
-  // ذخیره pending action با requestId
   const pendingKey = `pending_${requestId}_${nationalCode}_${license}`;
-  await redis.setex(pendingKey, 3600, JSON.stringify({ action, chatId, messageId })); // 1 ساعت مهلت برای توضیحات
+  await redis.setex(pendingKey, 3600, JSON.stringify({ action, chatId, messageId }));
   console.log(`Stored pending action: key=${pendingKey}, action=${action}`);
 
-  // غیرفعال کردن دکمه‌ها برای جلوگیری از کلیک دوباره
   await bot.editMessageReplyMarkup(
     { inline_keyboard: [] },
     { chat_id: chatId, message_id: messageId }
   );
 
-  // درخواست توضیحات
   await bot.sendMessage(
     chatId,
-    `لطفاً توضیحات برای *${action === 'accept' ? 'تأیید' : 'رد'}* درخواست (ID: ${requestId}) را وارد کنید:`,
+    `لطفاً توضیحات برای *${action === 'accept' ? 'تأیید' : 'رد'}* درخواست را وارد کنید:`,
     { parse_mode: 'Markdown' }
   );
 
-  // پاسخ به callback
   await bot.answerCallbackQuery(callbackQueryId, {
     text: `درخواست برای ${action === 'accept' ? 'تأیید' : 'رد'} ثبت شد.`
   });
 
-  // علامت‌گذاری callback به‌عنوان پردازش‌شده
-  await redis.setex(callbackKey, 3600 * 24, 'true'); // 24 ساعت ذخیره
+  await redis.setex(callbackKey, 3600 * 24, 'true');
 });
 
 // Handle پیام‌های متنی از ادمین
@@ -131,7 +125,6 @@ bot.on('message', async (msg) => {
 
   console.log(`Received message from admin: ${msg.text}`);
 
-  // چک pending actions
   const keys = await redis.keys('pending_*');
   for (const key of keys) {
     const pendingData = JSON.parse(await redis.get(key));
@@ -143,27 +136,27 @@ bot.on('message', async (msg) => {
       const action = pendingData.action;
 
       const responseMessage = action === 'accept'
-        ? `*درخواست تأیید شد* ✅\n*ID درخواست*: ${requestId}\n*توضیحات*: ${msg.text}`
-        : `*درخواست رد شد* ❌\n*ID درخواست*: ${requestId}\n*توضیحات*: ${msg.text}`;
+        ? `درخواست تأیید شد\nپاسخ: ${msg.text}`
+        : `درخواست رد شد\nپاسخ: ${msg.text}`;
 
       const responseKey = `response_${nationalCode}_${license}`;
-      await redis.setex(responseKey, 3600 * 24 * 7, responseMessage); // ذخیره 7 روز
-      await redis.del(key); // پاک کردن pending
+      await redis.setex(responseKey, 3600 * 24 * 7, responseMessage);
+      await redis.del(key);
       console.log(`Stored response: key=${responseKey}, message=${responseMessage}`);
 
       await bot.sendMessage(
         ADMIN_CHAT_ID,
-        `پاسخ ثبت شد:\n${responseMessage}`,
+        `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*وضعیت*: ${action === 'accept' ? 'تأیید' : 'رد'}\n*توضیحات*: ${msg.text}`,
         { parse_mode: 'Markdown' }
       );
 
-      return; // فقط اولین pending رو پردازش کن
+      return;
     }
   }
   console.log('No pending action found for text message');
 });
 
-// Endpoint برای اعتبارسنجی لایسنس
+// اعتبارسنجی لایسنس
 app.post('/validate-license', (req, res) => {
   const { license } = req.body;
   console.log(`Validating license: ${license}`);
@@ -175,7 +168,7 @@ app.post('/validate-license', (req, res) => {
   }
 });
 
-// Endpoint برای ارسال فرم
+// ارسال فرم
 app.post('/submit-form', async (req, res) => {
   const { name, minAge, maxAge, nationalCode, description, license } = req.body;
   console.log(`Received form: name=${name}, nationalCode=${nationalCode}, license=${license}`);
@@ -186,10 +179,10 @@ app.post('/submit-form', async (req, res) => {
     return res.json({ success: false, message: 'لایسنس نامعتبر است' });
   }
 
-  const requestId = uuidv4(); // تولید unique ID برای درخواست
+  const requestId = uuidv4();
   const nationalCodeText = nationalCode === '0' ? 'ندارد' : nationalCode;
   const descriptionText = description && description !== 'ندارد' ? description : 'ندارد';
-  const text = `*درخواست جدید* 📬\n*نام*: ${name}\n*سن*: ${minAge} تا ${maxAge}\n*کد ملی*: ${nationalCodeText}\n*توضیحات*: ${descriptionText}\n*لایسنس*: ${license}\n*ID درخواست*: ${requestId}`;
+  const text = `*درخواست جدید* 📬\n*نام*: ${name}\n*سن*: ${minAge} تا ${maxAge}\n*کد ملی*: ${nationalCodeText}\n*توضیحات*: ${descriptionText}`;
 
   const replyMarkup = {
     inline_keyboard: [
@@ -210,7 +203,7 @@ app.post('/submit-form', async (req, res) => {
   }
 });
 
-// Endpoint برای بررسی پاسخ
+// بررسی پاسخ
 app.post('/check-response', async (req, res) => {
   const { nationalCode, license } = req.body;
   const responseKey = `response_${nationalCode}_${license}`;
@@ -223,7 +216,7 @@ app.post('/check-response', async (req, res) => {
   }
 });
 
-// Endpoint برای پاک کردن پیام‌های قبلی
+// پاک کردن پیام‌های قبلی
 app.post('/clear-messages', async (req, res) => {
   const { nationalCode, license } = req.body;
   const responseKey = `response_${nationalCode}_${license}`;
@@ -232,18 +225,10 @@ app.post('/clear-messages', async (req, res) => {
   res.json({ success: true });
 });
 
-// پاسخ برای ریشه، برای رفع ارور Cannot GET /
+// پاسخ برای ریشه
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
-app.get('/test-redis', async (req, res) => {
-  try {
-    await redis.set('test_key', 'test_value');
-    const value = await redis.get('test_key');
-    res.send(`Redis test: ${value}`);
-  } catch (err) {
-    res.status(500).send(`Redis error: ${err}`);
-  }
-});
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
