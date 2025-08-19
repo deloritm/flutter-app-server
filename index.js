@@ -89,7 +89,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(
           ADMIN_CHAT_ID,
-          `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*توضیحات*: ${msg.text}`,
+          `*پاسخ توسط کاربر مشاهده شد* ✅\n*توضیحات*: ${msg.text}`,
           { parse_mode: 'Markdown' }
         );
       } catch (err) {
