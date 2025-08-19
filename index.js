@@ -181,6 +181,14 @@ app.post('/clear-messages', async (req, res) => {
   await redis.del(responseKey);
   res.json({ success: true });
 });
-
+app.get('/test-redis', async (req, res) => {
+  try {
+    await redis.set('test_key', 'test_value');
+    const value = await redis.get('test_key');
+    res.send(`Redis test: ${value}`);
+  } catch (err) {
+    res.status(500).send(`Redis error: ${err}`);
+  }
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on port ${port}`));
