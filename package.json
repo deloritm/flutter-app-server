@@ -13,7 +13,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "ioredis": "^5.7.0",
-    "node-telegram-bot-api": "^0.63.0"
-    "uuid": "^10.0.0"
+    "node-telegram-bot-api": "^0.63.0",
+    "uuid": "^11.1.0"
   }
 }
