@@ -12,7 +12,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const REDIS_URL = process.env.REDIS_URL;
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+const bot = new TelegramBot(BOT_TOKEN);
 const redis = new Redis(REDIS_URL);
 
 // Hardcoded license validation
@@ -36,111 +36,30 @@ app.get('/set-webhook', async (req, res) => {
 });
 
 // Webhook endpoint - پاسخ فوری و پردازش async
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
   res.sendStatus(200); // فوری 200 بفرست تا Telegram timeout نکنه
-  try {
-    const updateId = req.body.update_id;
-    if (!updateId) {
-      console.error('No update_id in webhook request');
-      return;
+  // پردازش update رو async کن
+  setImmediate(() => {
+    try {
+      bot.processUpdate(req.body);
+    } catch (err) {
+      console.error(`Error processing update: ${err}`);
     }
-    const processedKey = `processed_update_${updateId}`;
-    const alreadyProcessed = await redis.get(processedKey);
-    if (alreadyProcessed) {
-      console.log(`Duplicate update_id ${updateId}, ignoring`);
-      return;
-    }
-    await redis.setex(processedKey, 3600, 'true');
-    console.log(`Processing update_id ${updateId}`);
-    bot.processUpdate(req.body);
-  } catch (err) {
-    console.error(`Error processing webhook: ${err}`);
-  }
+  });
 });
 
 // خوش‌آمدگویی به ادمین
 bot.onText(/\/start/, async (msg) => {
   if (msg.chat.id.toString() === ADMIN_CHAT_ID) {
-    try {
-      await bot.sendMessage(
-        ADMIN_CHAT_ID,
-        '*سلام ادمین! 👋*\nاین ربات درخواست‌های کاربران را نمایش می‌دهد.\n1. درخواست را بررسی کنید.\n2. با دکمه‌های *تأیید* یا *رد* پاسخ دهید.\n3. توضیحات خود را بنویسید.',
-        { parse_mode: 'Markdown' }
-      );
-      console.log(`Sent welcome message to admin: chat_id=${ADMIN_CHAT_ID}`);
-    } catch (err) {
-      console.error(`Error sending welcome message: ${err}`);
-    }
-  }
-});
-
-// Handle callback_query - فوری پردازش و پیام بفرست
-bot.on('callback_query', async (callbackQuery) => {
-  const data = callbackQuery.data;
-  const chatId = callbackQuery.message.chat.id;
-  const callbackQueryId = callbackQuery.id;
-  const messageId = callbackQuery.message.message_id;
-
-  console.log(`Received callback: data=${data}, chat_id=${chatId}`);
-
-  if (!data || chatId.toString() !== ADMIN_CHAT_ID) {
-    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: داده نامعتبر یا دسترسی غیرمجاز' });
-    console.error(`Invalid callback data or unauthorized chat_id: ${chatId}`);
-    return;
-  }
-
-  const parts = data.split('_');
-  if (parts.length !== 4) {
-    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: ساختار داده نادرست' });
-    console.error(`Invalid callback data structure: ${data}`);
-    return;
-  }
-
-  const action = parts[0];
-  const nationalCode = parts[1];
-  const license = parts[2];
-  const requestId = parts[3];
-
-  const callbackKey = `callback_${requestId}_${nationalCode}_${license}`;
-  const alreadyProcessed = await redis.get(callbackKey);
-  if (alreadyProcessed) {
-    await bot.answerCallbackQuery(callbackQueryId, { text: 'این درخواست قبلاً پردازش شده است.' });
-    console.log(`Callback already processed: key=${callbackKey}`);
-    return;
-  }
-
-  const pendingKey = `pending_${requestId}_${nationalCode}_${license}`;
-  try {
-    await redis.setex(pendingKey, 3600, JSON.stringify({ action, chatId, messageId }));
-    console.log(`Stored pending action: key=${pendingKey}, action=${action}`);
-
-    // غیرفعال کردن دکمه‌ها
-    await bot.editMessageReplyMarkup(
-      { inline_keyboard: [] },
-      { chat_id: chatId, message_id: messageId }
-    );
-
-    // ارسال فوری پیام توضیحات
     await bot.sendMessage(
-      chatId,
-      `لطفاً توضیحات برای *${action === 'accept' ? 'تأیید' : 'رد'}* درخواست را وارد کنید:`,
+      ADMIN_CHAT_ID,
+      '*سلام ادمین! 👋*\nاین ربات درخواست‌های کاربران را نمایش می‌دهد.\n1. درخواست را بررسی کنید.\n2. پاسخ خود را بنویسید.',
       { parse_mode: 'Markdown' }
     );
-
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: `درخواست برای ${action === 'accept' ? 'تأیید' : 'رد'} ثبت شد.`
-    });
-
-    await redis.setex(callbackKey, 3600 * 24, 'true');
-    console.log(`Callback processed successfully: callbackKey=${callbackKey}`);
-  } catch (err) {
-    console.error(`Error in callback_query: ${err}`);
-    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطا در پردازش درخواست' });
-    await bot.sendMessage(ADMIN_CHAT_ID, 'خطا در ثبت درخواست. لطفاً دوباره امتحان کنید.');
   }
 });
 
-// Handle پیام‌های متنی از ادمین - فوری پردازش
+// Handle پیام‌های متنی از ادمین - ذخیره پاسخ
 bot.on('message', async (msg) => {
   if (msg.chat.id.toString() !== ADMIN_CHAT_ID || !msg.text || msg.text.startsWith('/')) return;
 
@@ -148,8 +67,7 @@ bot.on('message', async (msg) => {
 
   const keys = await redis.keys('pending_*');
   if (keys.length === 0) {
-    await bot.sendMessage(ADMIN_CHAT_ID, 'هیچ درخواست در انتظاری وجود ندارد. لطفاً ابتدا یک درخواست را تأیید یا رد کنید.');
-    console.log('No pending actions found');
+    await bot.sendMessage(ADMIN_CHAT_ID, 'هیچ درخواست در انتظاری وجود ندارد.');
     return;
   }
 
@@ -160,11 +78,8 @@ bot.on('message', async (msg) => {
       const requestId = parts[0];
       const nationalCode = parts[1];
       const license = parts[2];
-      const action = pendingData.action;
 
-      const responseMessage = action === 'accept'
-        ? `درخواست تأیید شد\nپاسخ: ${msg.text}`
-        : `درخواست رد شد\nپاسخ: ${msg.text}`;
+      const responseMessage = msg.text; // پاسخ مستقیم ادمین
 
       const responseKey = `response_${nationalCode}_${license}`;
       try {
@@ -174,10 +89,9 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(
           ADMIN_CHAT_ID,
-          `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*وضعیت*: ${action === 'accept' ? 'تأیید' : 'رد'}\n*توضیحات*: ${msg.text}`,
+          `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*توضیحات*: ${msg.text}`,
           { parse_mode: 'Markdown' }
         );
-        console.log(`Response sent to admin: chat_id=${ADMIN_CHAT_ID}`);
       } catch (err) {
         console.error(`Error storing response: ${err}`);
         await bot.sendMessage(ADMIN_CHAT_ID, 'خطا در ثبت پاسخ. لطفاً دوباره امتحان کنید.');
@@ -186,7 +100,6 @@ bot.on('message', async (msg) => {
     }
   }
   await bot.sendMessage(ADMIN_CHAT_ID, 'هیچ درخواست در انتظاری برای این چت یافت نشد.');
-  console.log('No matching pending action for this chat');
 });
 
 // اعتبارسنجی لایسنس
@@ -217,17 +130,16 @@ app.post('/submit-form', async (req, res) => {
   const descriptionText = description && description !== 'ندارد' ? description : 'ندارد';
   const text = `*درخواست جدید* 📬\n*نام*: ${name}\n*سن*: ${minAge} تا ${maxAge}\n*کد ملی*: ${nationalCodeText}\n*توضیحات*: ${descriptionText}`;
 
-  const replyMarkup = {
-    inline_keyboard: [
-      [
-        { text: '✅ تأیید', callback_data: `accept_${nationalCode}_${license}_${requestId}` },
-        { text: '❌ رد', callback_data: `reject_${nationalCode}_${license}_${requestId}` }
-      ]
-    ]
-  };
+  const pendingKey = `pending_${requestId}_${nationalCode}_${license}`;
 
   try {
-    await bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'Markdown', reply_markup: replyMarkup });
+    await bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'Markdown' });
+    await redis.setex(pendingKey, 3600, JSON.stringify({ chatId: ADMIN_CHAT_ID }));
+    await bot.sendMessage(
+      ADMIN_CHAT_ID,
+      'لطفاً پاسخ خود را وارد کنید:',
+      { parse_mode: 'Markdown' }
+    );
     console.log(`Form sent to Telegram: chat_id=${ADMIN_CHAT_ID}, requestId=${requestId}`);
     res.json({ success: true, message: 'اطلاعات ارسال شد، منتظر تأیید باشید' });
   } catch (err) {
