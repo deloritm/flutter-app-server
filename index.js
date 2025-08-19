@@ -75,13 +75,13 @@ bot.on('callback_query', async (callbackQuery) => {
   console.log(`Received callback: data=${data}, chat_id=${chatId}`);
 
   if (!data || chatId.toString() !== ADMIN_CHAT_ID) {
-    bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: داده نامعتبر یا دسترسی غیرمجاز' });
+    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: داده نامعتبر یا دسترسی غیرمجاز' });
     return;
   }
 
   const parts = data.split('_');
   if (parts.length !== 4) {
-    bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: ساختار داده نادرست' });
+    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطای داخلی: ساختار داده نادرست' });
     return;
   }
 
@@ -93,30 +93,37 @@ bot.on('callback_query', async (callbackQuery) => {
   const callbackKey = `callback_${requestId}_${nationalCode}_${license}`;
   const alreadyProcessed = await redis.get(callbackKey);
   if (alreadyProcessed) {
-    bot.answerCallbackQuery(callbackQueryId, { text: 'این درخواست قبلاً پردازش شده است.' });
+    await bot.answerCallbackQuery(callbackQueryId, { text: 'این درخواست قبلاً پردازش شده است.' });
     return;
   }
 
   const pendingKey = `pending_${requestId}_${nationalCode}_${license}`;
-  await redis.setex(pendingKey, 3600, JSON.stringify({ action, chatId, messageId }));
-  console.log(`Stored pending action: key=${pendingKey}, action=${action}`);
+  try {
+    await redis.setex(pendingKey, 3600, JSON.stringify({ action, chatId, messageId }));
+    console.log(`Stored pending action: key=${pendingKey}, action=${action}`);
 
-  await bot.editMessageReplyMarkup(
-    { inline_keyboard: [] },
-    { chat_id: chatId, message_id: messageId }
-  );
+    // غیرفعال کردن دکمه‌ها
+    await bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      { chat_id: chatId, message_id: messageId }
+    );
 
-  await bot.sendMessage(
-    chatId,
-    `لطفاً توضیحات برای *${action === 'accept' ? 'تأیید' : 'رد'}* درخواست را وارد کنید:`,
-    { parse_mode: 'Markdown' }
-  );
+    // ارسال فوری پیام توضیحات
+    await bot.sendMessage(
+      chatId,
+      `لطفاً توضیحات برای *${action === 'accept' ? 'تأیید' : 'رد'}* درخواست را وارد کنید:`,
+      { parse_mode: 'Markdown' }
+    );
 
-  await bot.answerCallbackQuery(callbackQueryId, {
-    text: `درخواست برای ${action === 'accept' ? 'تأیید' : 'رد'} ثبت شد.`
-  });
+    await bot.answerCallbackQuery(callbackQueryId, {
+      text: `درخواست برای ${action === 'accept' ? 'تأیید' : 'رد'} ثبت شد.`
+    });
 
-  await redis.setex(callbackKey, 3600 * 24, 'true');
+    await redis.setex(callbackKey, 3600 * 24, 'true');
+  } catch (err) {
+    console.error(`Error in callback_query: ${err}`);
+    await bot.answerCallbackQuery(callbackQueryId, { text: 'خطا در پردازش درخواست' });
+  }
 });
 
 // Handle پیام‌های متنی از ادمین
@@ -140,16 +147,20 @@ bot.on('message', async (msg) => {
         : `درخواست رد شد\nپاسخ: ${msg.text}`;
 
       const responseKey = `response_${nationalCode}_${license}`;
-      await redis.setex(responseKey, 3600 * 24 * 7, responseMessage);
-      await redis.del(key);
-      console.log(`Stored response: key=${responseKey}, message=${responseMessage}`);
+      try {
+        await redis.setex(responseKey, 3600 * 24 * 7, responseMessage);
+        await redis.del(key);
+        console.log(`Stored response: key=${responseKey}, message=${responseMessage}`);
 
-      await bot.sendMessage(
-        ADMIN_CHAT_ID,
-        `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*وضعیت*: ${action === 'accept' ? 'تأیید' : 'رد'}\n*توضیحات*: ${msg.text}`,
-        { parse_mode: 'Markdown' }
-      );
-
+        await bot.sendMessage(
+          ADMIN_CHAT_ID,
+          `*پاسخ ثبت شد* ✅\nپاسخ شما برای درخواست کاربر ذخیره شد و برای کاربر قابل مشاهده است.\n*وضعیت*: ${action === 'accept' ? 'تأیید' : 'رد'}\n*توضیحات*: ${msg.text}`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (err) {
+        console.error(`Error storing response: ${err}`);
+        await bot.sendMessage(ADMIN_CHAT_ID, 'خطا در ثبت پاسخ. لطفاً دوباره امتحان کنید.');
+      }
       return;
     }
   }
