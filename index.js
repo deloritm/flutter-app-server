@@ -123,6 +123,7 @@ bot.on('callback_query', async (callbackQuery) => {
   } catch (err) {
     console.error(`Error in callback_query: ${err}`);
     await bot.answerCallbackQuery(callbackQueryId, { text: 'خطا در پردازش درخواست' });
+    await bot.sendMessage(ADMIN_CHAT_ID, 'خطا در ثبت درخواست. لطفاً دوباره امتحان کنید.');
   }
 });
 
@@ -133,6 +134,11 @@ bot.on('message', async (msg) => {
   console.log(`Received message from admin: ${msg.text}`);
 
   const keys = await redis.keys('pending_*');
+  if (keys.length === 0) {
+    await bot.sendMessage(ADMIN_CHAT_ID, 'هیچ درخواست در انتظاری وجود ندارد. لطفاً ابتدا یک درخواست را تأیید یا رد کنید.');
+    return;
+  }
+
   for (const key of keys) {
     const pendingData = JSON.parse(await redis.get(key));
     if (pendingData && pendingData.chatId.toString() === ADMIN_CHAT_ID) {
@@ -164,7 +170,7 @@ bot.on('message', async (msg) => {
       return;
     }
   }
-  console.log('No pending action found for text message');
+  await bot.sendMessage(ADMIN_CHAT_ID, 'هیچ درخواست در انتظاری برای این چت یافت نشد.');
 });
 
 // اعتبارسنجی لایسنس
